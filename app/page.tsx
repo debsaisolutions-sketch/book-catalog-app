@@ -4,8 +4,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   identifyBookFromImage,
   identifyBookFromText,
+  identifyBookFromIsbn,
   generateListingCopy,
 } from "@/lib/anthropic";
+import {
+  getBarcodeDetector,
+  isbnFromBarcode,
+  isValidIsbn,
+  lookupIsbn,
+  normalizeIsbn,
+} from "@/lib/isbn";
 import {
   fetchBooks,
   insertBook,
@@ -42,7 +50,13 @@ export default function Home() {
 
   const [title, setTitle] = useState("");
   const [author, setAuthor] = useState("");
+  const [isbn, setIsbn] = useState("");
   const [condition, setCondition] = useState("Good");
+  const [scanning, setScanning] = useState(false);
+  const [scanSupported, setScanSupported] = useState(false);
+
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const scanLoopRef = useRef<number | null>(null);
 
   const [modalContent, setModalContent] = useState<string | null>(null);
   const [modalTitle, setModalTitle] = useState("");
@@ -68,7 +82,62 @@ export default function Home() {
   useEffect(() => {
     loadBooks();
     refreshQueue();
+    setScanSupported(!!getBarcodeDetector());
   }, [loadBooks, refreshQueue]);
+
+  useEffect(() => {
+    if (!scanning) return;
+
+    let stream: MediaStream | null = null;
+    const detector = getBarcodeDetector();
+
+    const startScanner = async () => {
+      if (!detector || !videoRef.current) {
+        setError("Barcode scanning not supported in this browser. Type the ISBN instead.");
+        setScanning(false);
+        return;
+      }
+
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "environment" },
+          audio: false,
+        });
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+
+        const scan = async () => {
+          if (!videoRef.current || !scanning) return;
+          try {
+            const codes = await detector.detect(videoRef.current);
+            for (const code of codes) {
+              const found = isbnFromBarcode(code.rawValue);
+              if (found) {
+                setIsbn(found);
+                setScanning(false);
+                setSuccess(`ISBN scanned: ${found}`);
+                return;
+              }
+            }
+          } catch {
+            /* keep scanning */
+          }
+          scanLoopRef.current = requestAnimationFrame(scan);
+        };
+        scanLoopRef.current = requestAnimationFrame(scan);
+      } catch {
+        setError("Camera access denied. Allow camera or type the ISBN manually.");
+        setScanning(false);
+      }
+    };
+
+    startScanner();
+
+    return () => {
+      if (scanLoopRef.current) cancelAnimationFrame(scanLoopRef.current);
+      stream?.getTracks().forEach((t) => t.stop());
+    };
+  }, [scanning]);
 
   const sellTotal = useMemo(
     () =>
@@ -168,7 +237,44 @@ export default function Home() {
       setAuthor("");
       setTab("catalog");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Lookup failed");
+      const msg = e instanceof Error ? e.message : "Lookup failed";
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleIsbnLookup = async () => {
+    const clean = normalizeIsbn(isbn);
+    if (!isValidIsbn(clean)) {
+      setError("Enter a valid 10- or 13-digit ISBN");
+      return;
+    }
+    clearMessages();
+    setLoading(true);
+    try {
+      const info = await lookupIsbn(clean);
+      if (!info) {
+        setError("ISBN not found in Open Library. Try photo lookup or enter title manually.");
+        return;
+      }
+      setTitle(info.title);
+      setAuthor(info.author);
+      const result = await identifyBookFromIsbn(
+        info.isbn,
+        info.title,
+        info.author,
+        condition
+      );
+      await saveBookToCatalog(result, condition);
+      setSuccess(`Added "${result.title}" to catalog`);
+      setIsbn("");
+      setTitle("");
+      setAuthor("");
+      setTab("catalog");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "ISBN lookup failed";
+      setError(msg);
     } finally {
       setLoading(false);
     }
@@ -283,6 +389,48 @@ export default function Home() {
 
             <div className="card">
               <h2>Single Lookup</h2>
+
+              <div className="field">
+                <label>ISBN</label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="9780140449136"
+                  value={isbn}
+                  onChange={(e) => setIsbn(e.target.value)}
+                />
+              </div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+                {scanSupported && (
+                  <button
+                    className="btn btn-secondary"
+                    style={{ flex: 1 }}
+                    onClick={() => {
+                      clearMessages();
+                      setScanning(true);
+                    }}
+                    disabled={loading}
+                  >
+                    Scan Barcode
+                  </button>
+                )}
+                <button
+                  className="btn btn-primary"
+                  style={{ flex: 1 }}
+                  onClick={handleIsbnLookup}
+                  disabled={loading}
+                >
+                  Lookup by ISBN
+                </button>
+              </div>
+              {!scanSupported && (
+                <p style={{ fontSize: "0.75rem", color: "var(--muted)", marginBottom: 12 }}>
+                  Barcode scan works in Chrome/Edge on mobile. Type ISBN manually on other browsers.
+                </p>
+              )}
+
+              <div className="divider">or photo / title</div>
+
               <div
                 className="capture-zone"
                 style={{ padding: "20px 16px", marginBottom: 16 }}
@@ -528,6 +676,24 @@ export default function Home() {
               onClick={() => setModalContent(null)}
             >
               Close
+            </button>
+          </div>
+        </div>
+      )}
+
+      {scanning && (
+        <div className="modal-overlay" onClick={() => setScanning(false)}>
+          <div className="modal scanner-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Scan ISBN Barcode</h3>
+            <p style={{ fontSize: "0.8rem", color: "var(--muted)", marginBottom: 12 }}>
+              Point your camera at the barcode on the back cover
+            </p>
+            <video ref={videoRef} className="scanner-video" playsInline muted />
+            <button
+              className="btn btn-secondary modal-close"
+              onClick={() => setScanning(false)}
+            >
+              Cancel
             </button>
           </div>
         </div>

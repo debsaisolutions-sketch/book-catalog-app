@@ -42,7 +42,33 @@ async function callAnthropic(
 
 function parseJsonResponse<T>(text: string): T {
   const cleaned = text.replace(/```json\n?|\n?```/g, "").trim();
-  return JSON.parse(cleaned) as T;
+  try {
+    return JSON.parse(cleaned) as T;
+  } catch {
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (match) {
+      try {
+        return JSON.parse(match[0]) as T;
+      } catch {
+        /* fall through */
+      }
+    }
+    throw new Error(
+      "Could not read book data from AI response. Try again or use ISBN lookup."
+    );
+  }
+}
+
+function validateIdentification(result: BookIdentification): BookIdentification {
+  if (!result.title?.trim()) throw new Error("AI could not identify the book title");
+  if (typeof result.estimated_midpoint !== "number" || isNaN(result.estimated_midpoint)) {
+    result.estimated_midpoint = 5;
+  }
+  if (!result.estimated_value) result.estimated_value = "$1-$10";
+  if (!result.author) result.author = "Unknown";
+  if (!result.category) result.category = "General";
+  if (!result.rationale) result.rationale = "Estimated based on typical resale market.";
+  return result;
 }
 
 function applyRecommendation(midpoint: number): "SELL" | "DONATE" {
@@ -81,7 +107,7 @@ export async function identifyBookFromImage(
     },
   ]);
 
-  const result = parseJsonResponse<BookIdentification>(text);
+  const result = validateIdentification(parseJsonResponse<BookIdentification>(text));
   result.recommendation = applyRecommendation(result.estimated_midpoint);
   return result;
 }
@@ -101,7 +127,29 @@ Condition: ${condition}
 If title/author are partial, make your best identification.`
   );
 
-  const result = parseJsonResponse<BookIdentification>(text);
+  const result = validateIdentification(parseJsonResponse<BookIdentification>(text));
+  result.recommendation = applyRecommendation(result.estimated_midpoint);
+  return result;
+}
+
+export async function identifyBookFromIsbn(
+  isbn: string,
+  title: string,
+  author: string,
+  condition: string
+): Promise<BookIdentification> {
+  const text = await callAnthropic(
+    IDENTIFY_SYSTEM,
+    `Identify and value this book by ISBN:
+ISBN: ${isbn}
+Title: ${title}
+Author: ${author}
+Condition: ${condition}
+
+Use the ISBN and title/author to determine accurate edition and current resale value.`
+  );
+
+  const result = validateIdentification(parseJsonResponse<BookIdentification>(text));
   result.recommendation = applyRecommendation(result.estimated_midpoint);
   return result;
 }
