@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { isValidIsbn, normalizeIsbn } from "@/lib/isbn";
+import { lookupIsbnServer } from "@/lib/isbn-lookup";
 
 const API_URL = "https://api.anthropic.com/v1/messages";
 const MODEL = "claude-sonnet-4-6";
@@ -10,7 +11,9 @@ const IDENTIFY_SYSTEM = `You are a book identification and valuation expert. Ret
 function getSupabase() {
   const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) throw new Error("Supabase not configured");
+  if (!url || !key) {
+    throw new Error("Supabase server credentials are not configured");
+  }
   return createClient(url, key);
 }
 
@@ -20,20 +23,6 @@ function getAnthropicKey() {
     process.env.NEXT_PUBLIC_ANTHROPIC_API_KEY;
   if (!key) throw new Error("Anthropic API key not configured");
   return key;
-}
-
-async function lookupGoogleBooks(clean: string) {
-  const url = `https://www.googleapis.com/books/v1/volumes?q=isbn:${clean}`;
-  const response = await fetch(url, { signal: AbortSignal.timeout(8000) });
-  if (!response.ok) return null;
-  const data = await response.json();
-  const item = data.items?.[0]?.volumeInfo;
-  if (!item?.title) return null;
-  return {
-    isbn: clean,
-    title: item.title as string,
-    author: (item.authors as string[] | undefined)?.join(", ") || "Unknown",
-  };
 }
 
 async function callAnthropic(prompt: string) {
@@ -52,8 +41,7 @@ async function callAnthropic(prompt: string) {
     }),
   });
   if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`AI error: ${response.status}`);
+    throw new Error(`AI valuation failed (${response.status})`);
   }
   const data = await response.json();
   const text = data.content?.[0]?.text;
@@ -75,7 +63,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid ISBN" }, { status: 400 });
     }
 
-    const info = await lookupGoogleBooks(clean);
+    const info = await lookupIsbnServer(clean);
     if (!info) {
       return NextResponse.json({ error: "ISBN not found" }, { status: 404 });
     }
@@ -104,7 +92,7 @@ Condition: ${condition}`
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) throw new Error(`Database save failed: ${error.message}`);
     return NextResponse.json(data);
   } catch (e) {
     const message = e instanceof Error ? e.message : "Lookup failed";

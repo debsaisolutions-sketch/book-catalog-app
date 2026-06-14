@@ -20,7 +20,7 @@ export async function GET() {
       .select("*")
       .order("created_at", { ascending: false });
 
-    if (error) throw error;
+    if (error) throw new Error(error.message);
     return NextResponse.json(data ?? []);
   } catch (e) {
     const message = e instanceof Error ? e.message : "Failed to load books";
@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) throw new Error(error.message);
     return NextResponse.json(data);
   } catch (e) {
     const message = e instanceof Error ? e.message : "Failed to save book";
@@ -53,7 +53,7 @@ export async function PATCH(request: NextRequest) {
       .update({ condition_note })
       .eq("id", id);
 
-    if (error) throw error;
+    if (error) throw new Error(error.message);
     return NextResponse.json({ ok: true });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Failed to update note";
@@ -72,7 +72,7 @@ export async function DELETE(request: NextRequest) {
       .delete()
       .eq("id", id);
 
-    if (error) throw error;
+    if (error) throw new Error(error.message);
     return NextResponse.json({ ok: true });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Failed to delete book";
