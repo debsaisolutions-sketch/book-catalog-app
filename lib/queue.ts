@@ -22,9 +22,13 @@ export function addToQueue(imageData: string): QueueItem {
     imageData,
     addedAt: Date.now(),
   };
-  const queue = getQueue();
-  queue.unshift(item);
-  saveQueue(queue);
+  try {
+    const queue = getQueue();
+    queue.unshift(item);
+    saveQueue(queue);
+  } catch {
+    throw new Error("Could not save photo to queue — storage may be full. Try single lookup instead.");
+  }
   return item;
 }
 

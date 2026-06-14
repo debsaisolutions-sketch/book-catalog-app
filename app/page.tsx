@@ -4,14 +4,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   identifyBookFromImage,
   identifyBookFromText,
-  identifyBookFromIsbn,
   generateListingCopy,
 } from "@/lib/anthropic";
 import {
   getBarcodeDetector,
   isbnFromBarcode,
   isValidIsbn,
-  lookupIsbn,
   normalizeIsbn,
 } from "@/lib/isbn";
 import {
@@ -191,13 +189,17 @@ export default function Home() {
   const handleBatchPhotos = async (files: FileList | null) => {
     if (!files?.length) return;
     clearMessages();
-    for (const file of Array.from(files)) {
-      const base64 = await fileToBase64(file);
-      addToQueue(base64);
+    try {
+      for (const file of Array.from(files)) {
+        const base64 = await fileToBase64(file);
+        addToQueue(base64);
+      }
+      refreshQueue();
+      setSuccess(`Added ${files.length} photo(s) to queue`);
+      setTab("queue");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to add photos to queue");
     }
-    refreshQueue();
-    setSuccess(`Added ${files.length} photo(s) to queue`);
-    setTab("queue");
   };
 
   const handleSinglePhoto = async (file: File | null) => {
@@ -253,32 +255,23 @@ export default function Home() {
     clearMessages();
     setLoading(true);
     try {
-      const info = await lookupIsbn(clean);
-      if (!info) {
-        setError("ISBN not found in Open Library. Try photo lookup or enter title manually.");
-        return;
+      const response = await fetch("/api/lookup-isbn", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isbn: clean, condition }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "ISBN lookup failed");
       }
-      setTitle(info.title);
-      setAuthor(info.author);
-      const result = await identifyBookFromIsbn(
-        info.isbn,
-        info.title,
-        info.author,
-        condition
-      );
-      await saveBookToCatalog(result, condition);
-      setSuccess(`Added "${result.title}" to catalog`);
+      await loadBooks();
+      setSuccess(`Added "${data.title}" to catalog`);
       setIsbn("");
       setTitle("");
       setAuthor("");
       setTab("catalog");
     } catch (e) {
-      const msg =
-        e instanceof Error
-          ? e.message
-          : typeof e === "object" && e && "message" in e
-            ? String((e as { message: unknown }).message)
-            : "ISBN lookup failed";
+      const msg = e instanceof Error ? e.message : "ISBN lookup failed";
       setError(msg);
     } finally {
       setLoading(false);

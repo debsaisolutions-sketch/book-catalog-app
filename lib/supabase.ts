@@ -1,56 +1,44 @@
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { Book } from "./types";
 
-let supabase: SupabaseClient | null = null;
-
-function getSupabase(): SupabaseClient {
-  if (!supabase) {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-    if (!url || !key) {
-      throw new Error("Supabase environment variables are not configured");
-    }
-    supabase = createClient(url, key);
+async function apiJson<T>(
+  url: string,
+  options?: RequestInit
+): Promise<T> {
+  const response = await fetch(url, options);
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || `Request failed (${response.status})`);
   }
-  return supabase;
+  return data as T;
 }
 
 export async function fetchBooks(): Promise<Book[]> {
-  const { data, error } = await getSupabase()
-    .from("book_catalog")
-    .select("*")
-    .order("created_at", { ascending: false });
-
-  if (error) throw error;
-  return (data ?? []) as Book[];
+  return apiJson<Book[]>("/api/books");
 }
 
 export async function insertBook(
   book: Omit<Book, "id" | "created_at">
 ): Promise<Book> {
-  const { data, error } = await getSupabase()
-    .from("book_catalog")
-    .insert(book)
-    .select()
-    .single();
-
-  if (error) throw error;
-  return data as Book;
+  return apiJson<Book>("/api/books", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(book),
+  });
 }
 
 export async function updateBookNote(
   id: string,
   condition_note: string
 ): Promise<void> {
-  const { error } = await getSupabase()
-    .from("book_catalog")
-    .update({ condition_note })
-    .eq("id", id);
-
-  if (error) throw error;
+  await apiJson("/api/books", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id, condition_note }),
+  });
 }
 
 export async function deleteBook(id: string): Promise<void> {
-  const { error } = await getSupabase().from("book_catalog").delete().eq("id", id);
-  if (error) throw error;
+  await apiJson(`/api/books?id=${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
 }
