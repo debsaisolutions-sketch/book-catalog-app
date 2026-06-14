@@ -273,7 +273,12 @@ export default function Home() {
       setAuthor("");
       setTab("catalog");
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "ISBN lookup failed";
+      const msg =
+        e instanceof Error
+          ? e.message
+          : typeof e === "object" && e && "message" in e
+            ? String((e as { message: unknown }).message)
+            : "ISBN lookup failed";
       setError(msg);
     } finally {
       setLoading(false);

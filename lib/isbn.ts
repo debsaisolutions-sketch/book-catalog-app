@@ -17,22 +17,15 @@ export async function lookupIsbn(isbn: string): Promise<IsbnBookInfo | null> {
   const clean = normalizeIsbn(isbn);
   if (!isValidIsbn(clean)) return null;
 
-  const url = `https://openlibrary.org/api/books?bibkeys=ISBN:${clean}&format=json&jscmd=data`;
-  const response = await fetch(url);
+  const response = await fetch(`/api/isbn?isbn=${encodeURIComponent(clean)}`);
+  const data = await response.json();
+
+  if (response.status === 404) return null;
   if (!response.ok) {
-    throw new Error(`ISBN lookup failed (${response.status})`);
+    throw new Error(data.error || `ISBN lookup failed (${response.status})`);
   }
 
-  const data = await response.json();
-  const book = data[`ISBN:${clean}`];
-  if (!book?.title) return null;
-
-  const authors = book.authors as Array<{ name: string }> | undefined;
-  return {
-    isbn: clean,
-    title: book.title,
-    author: authors?.map((a) => a.name).join(", ") || "Unknown",
-  };
+  return data as IsbnBookInfo;
 }
 
 export type BarcodeDetectorLike = {
